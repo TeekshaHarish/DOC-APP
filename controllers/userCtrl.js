@@ -2,6 +2,7 @@ const userModel=require("../models/userModels");
 const bcrypt=require("bcryptjs");
 const jwt=require("jsonwebtoken");
 const doctorModel=require("../models/doctorModel");
+const appointmentModel=require("../models/appointmentModel");
 
 const registerController=async(req,res)=>{
     try {
@@ -40,7 +41,7 @@ const loginController=async(req,res)=>{
                 message:"User not found"
             });
         }
-        console.log(req.body,user);
+        // console.log(req.body,user);
         const isMatch=await bcrypt.compare(req.body.password,user.password);
         if(!isMatch){
             return res.status(200).send({
@@ -90,6 +91,13 @@ const authController=async(req,res)=>{
 
 const applyDoctorController= async(req,res)=>{
     try{
+        const existingDoctor=await doctorModel.findOne({userId:req.body.userId});
+        if(existingDoctor){
+            return res.status(200).send({
+                success:false,
+                message:"You have already applied for doctor position"
+            })
+        }
         const newDoctor=new doctorModel({...req.body,status:'pending',userId:req.body.userId});
         await newDoctor.save();
         const adminUser=await userModel.findOne({isAdmin:true});
@@ -97,16 +105,16 @@ const applyDoctorController= async(req,res)=>{
         notification.push({
             type:'apply-doctor-request',
             message:`${newDoctor.firstName} ${newDoctor.lastName} has applied for a doctor account`,
+            onClickPath:"/admin/doctors",
             data:{
                 doctorId:newDoctor._id,
                 name:newDoctor.firstName+" "+newDoctor.lastName,
-                onClickPath:"/admin/doctors"
             }
         })
         await userModel.findByIdAndUpdate(adminUser._id,{notification});
         res.status(200).send({
             success:true,
-            message:"Doctor Account applied successfully"
+            message:"Doctor Account applied successfully 🥳"
         })
     }catch(error){
         console.log(error);
@@ -117,4 +125,163 @@ const applyDoctorController= async(req,res)=>{
     }
 }
 
-module.exports={loginController,registerController,authController,applyDoctorController};
+const getAllNotificationsController=async(req,res)=>{
+    try {
+        const user=await userModel.findById(req.body.userId);
+        const seenNotification=user.seenNotification;
+        const notification=user.notification;
+        seenNotification.push(...notification);
+        user.notification=[];
+        user.seenNotification=seenNotification;
+        const updatedUser=await user.save();
+        updatedUser.password=undefined;
+        // console.log(user);
+            res.status(200).send({
+                success:true,
+                message:"All notifications marked as read",
+                data:updatedUser
+            })
+        
+    } catch (error) {
+        console.log(error);
+        res.status(500).send({
+            success:false,
+            error,
+            message:"Error while fetching notifications"
+        })
+    }
+}
+
+const deleteAllNotificationsController= async(req,res)=>{
+    try {
+        const user=await userModel.findById(req.body.userId);
+        user.seenNotification=[];
+        const updatedUser=await user.save();
+        updatedUser.password=undefined;
+        res.status(200).send({
+            success:true,
+            message:"Notifications Deleted Successfully",
+            data:updatedUser
+        })
+    } catch (error) {
+        console.log(error);
+        res.status(500).send({
+            success:false,
+            message:"Error while deleting notifications",
+            error
+        })
+    }
+}
+const getAllDoctorsController=async(req,res)=>{
+    try {
+        const doctors=await doctorModel.find({status:"approved"});
+        res.status(200).send({
+            success:true, 
+            message:"doctor data fetched successfully",
+            data:doctors
+        })
+    } catch (error) {
+        console.log(error);
+        res.status(500).send({
+            success:true,
+            error,
+            message:":Error while fetching doctor data"
+        })
+    }
+}
+
+const bookAppointmentController=async(req,res)=>{
+    try {
+        
+        req.body.status='Scheduled';
+        const newAppointment=new appointmentModel(req.body);
+        const doctor=await doctorModel.findById(req.body.doctorId).populate('userId');
+
+        //check if the person booking isnt the same as the doctor
+        if(doctor.userId._id==req.body.userId){
+            return res.status(200).send({
+                success:false,
+                message:"You can't book you own appointment dear 😉"
+            })
+        }
+        await newAppointment.save();
+        
+        const user=await userModel.findById(req.body.userId);
+        console.log(doctor.userId.notification);
+        doctor.userId.notification.push({
+            type:'New appointment request',
+            message:`A new appointment request from ${user.name}`,
+            onClickPath:'/users/appointments'
+        })
+        doctor.userId.save();
+        //doc id , time and date in formatted way
+        res.status(200).send({
+            success:true, 
+            message:"Appointment booked successfully 😊",
+            data:newAppointment
+        })
+    } catch (error) {
+        console.log(error);
+        res.status(500).send({
+            success:false,
+            message:"Error while booking appointment",
+            error
+        })
+    }
+}
+
+const checkAvailabilityController=async(req,res)=>{
+    try {
+        const {date,startTime,endTime,doctorId,userId,beforeTime}= req.body;
+        console.log(beforeTime,startTime,endTime);
+        const appt=await appointmentModel.find({date:date,doctorId:doctorId, startTime:{$lt:endTime,$gt:beforeTime}});
+        console.log(appt);
+        if(appt.length==0){
+            const dayAppt=await appointmentModel.find({date,doctorId,userId});
+            if(dayAppt.length>0){
+                return res.status(200).send({
+                    success:false, 
+                    message:"You already have an appointment booked for that day!",
+                    isAvailable:false
+                })
+            }
+            res.status(200).send({
+                success:true, 
+                message:"Appointment Available",
+                isAvailable:true
+            })
+        }else{
+            res.status(200).send({
+                success:false, 
+                message:"Time Slot Not Available🥲",
+                isAvailable:false
+            })
+        }
+    } catch (error) {
+        console.log(error);
+        res.status(500).send({
+            success:false,
+            error,
+            message:"Error while chcking availaity of appointment"
+        })
+    }
+}
+
+const getAppointmentsController=async(req,res)=>{
+    try {
+        const appointments=await appointmentModel.find({userId:req.body.userId,status:"Scheduled"}).populate('userId').populate('doctorId').sort({date:1});
+        res.status(200).send({
+            success:true,
+            message:"Appointments fecthed successfully",
+            data:appointments
+        });
+    } catch (error) {
+        console.log(error);
+        res.status(500).send({
+            success:false,
+            message:"Error while fetching appointments"
+        })
+    }
+}
+
+module.exports={loginController,registerController,authController,applyDoctorController,getAllNotificationsController,deleteAllNotificationsController,getAllDoctorsController,bookAppointmentController,checkAvailabilityController,getAppointmentsController};

@@ -44,6 +44,11 @@ const doctorSchema= new mongoose.Schema({
         type:Array,
         required:[true,'timings is required']
     },
+    userId:{
+        type:mongoose.Schema.Types.ObjectId,
+        ref:'users',
+        required:true
+    }
     
 },{timestamps:true})
 
